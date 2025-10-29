@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+env/
+venv/
+
+# Jupyter Notebook
+.ipynb_checkpoints/
+
+# Data files (large CSVs not tracked)
+data/
+*.csv
+*.tsv
+*.xlsx
+
+# Model files
+*.pkl
+*.joblib
+*.json
+
+# System files
+.DS_Store
+Thumbs.db
+
+# Environment files
+.env
