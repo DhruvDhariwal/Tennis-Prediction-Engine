@@ -1,28 +1,43 @@
 # Python
 __pycache__/
-*.pyc
-*.pyo
-*.pyd
-env/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
 venv/
+env/
 
-# Jupyter Notebook
+# Jupyter
 .ipynb_checkpoints/
 
-# Data files (large CSVs not tracked)
-data/
-*.csv
-*.tsv
-*.xlsx
+# Testing / tooling
+.pytest_cache/
+.coverage
+htmlcov/
+.ruff_cache/
+.mypy_cache/
 
-# Model files
+# Raw ATP data (download separately -- see README)
+data/
+atp_matches_*.csv
+atp_rankings_*.csv
+atp_players.csv
+
+# Build outputs: model, engine state, metrics and figures are all regenerable
+# via `python -m tennis_engine train`, so none of them belong in git.
+artifacts/
+artifacts_*/
 *.pkl
 *.joblib
-*.json
 
-# System files
+# Legacy outputs from the pre-2.0 notebook pipeline (safe to delete)
+/tennis_xgb_model.json
+/player_state_after_2024.pkl
+/rating_state_after_2024.pkl
+/models/
+
+# System
 .DS_Store
 Thumbs.db
-
-# Environment files
 .env

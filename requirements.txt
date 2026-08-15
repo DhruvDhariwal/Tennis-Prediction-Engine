@@ -1,0 +1,7 @@
+# Runtime dependencies. For development extras use: pip install -e ".[dev]"
+pandas>=2.0
+numpy>=1.24
+scipy>=1.10
+xgboost>=2.0
+scikit-learn>=1.3
+matplotlib>=3.7

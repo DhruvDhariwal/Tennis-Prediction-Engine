@@ -1,203 +1,273 @@
-# Tennis Prediction Engine (Leak-Proof & Ranked) 🎾
+# Tennis Prediction Engine 🎾
 
-## Overview 📖
+**Predicting ATP match winners from 884,030 matches (1968–2024) — leak-proof, order-invariant, and calibrated.**
 
-This project implements a robust machine learning system to predict the winner of ATP tennis matches. It uses historical match data, player information, and weekly ATP rankings to train an XGBoost model.
+An XGBoost match-winner model built on Jeff Sackmann's ATP data, with a chronological
+feature engine (Elo, surface Elo, head-to-head, rolling serve/return form, point-in-time
+ATP rankings), an honest three-way temporal split, probability calibration, and a CLI for
+scoring arbitrary match-ups.
 
-**Key Goals & Features:**
-
-* **🚫 Leak-Proof Design:** Features are engineered strictly using information available *before* the start of each match. This prevents data leakage and ensures the model generalizes to future, unseen matches.
-* **🕰️ Chronological Processing:** All data processing, feature updates (like Elo ratings), and rolling statistics are calculated in strict chronological order.
-* **📊 Comprehensive Features:** The model incorporates various predictive signals:
-    * **Elo & Surface-Specific Elo:** Captures overall and surface-adjusted player strength. K-factor varies by match level (ATP, Challenger, Futures).
-    * **ATP Rankings & Points:** Uses official weekly rankings via efficient "as-of" lookups.
-    * **Head-to-Head (H2H):** Direct historical matchup results.
-    * **Rolling Form:** Recent win rate (last N matches).
-    * **Rolling Serve Stats:** Average ace rate, double fault rate, and service points won rate over recent matches.
-    * **Static Attributes:** Differences in height and age (where available).
-    * **Surface Encoding:** One-hot encoding for Hard, Clay, Grass, Carpet.
-* **↔️ Order-Invariant Features:** Features are designed as differences (e.g., `elo_diff = player_A_elo - player_B_elo`). This ensures `P(A wins B)` is approximately equal to `1 - P(B wins A)`.
-* **🚀 Efficient Ranking Lookup:** Pre-processes millions of weekly ranking rows into an optimized dictionary for near-instantaneous lookup using binary search (`bisect`).
-* **⚙️ XGBoost Model:** Utilizes the efficient gradient boosting algorithm (`hist` tree method) for training.
-* **📅 Clear Train/Test Split:** Uses a hard chronological split (e.g., train up to 2023, test on 2024) to rigorously evaluate performance.
-* **🔮 Prediction Utility:** Provides a `predict_match` function to score future matchups using the saved model and player state.
+```bash
+$ python -m tennis_engine predict "Jannik Sinner" "Carlos Alcaraz" --surface Clay --best-of 5
+```
 
 ---
 
-## Features Used 📈
+## Results
 
-The model trains on the following features, calculated as differences between Player A and Player B for a given match:
+Trained on 1991–2022, early-stopped on 2023, evaluated on **2024 — a season the model
+never saw during training, tuning, calibration or model selection.**
 
-* `rank_diff`: Difference in ATP Rank just before the match.
-* `points_diff`: Difference in ATP Points just before the match.
-* `elo_diff`: Difference in global Elo rating.
-* `surf_elo_diff`: Difference in surface-specific Elo rating (Hard, Clay, Grass, Carpet).
-* `roll_winrate_diff`: Difference in win percentage over the last `ROLL_N` matches.
-* `matches_played_diff`: Difference in total matches played historically.
-* `wins_diff`: Difference in total matches won historically.
-* `h2h_diff`: Difference in head-to-head wins (`A wins over B` - `B wins over A`).
-* `ace_rate_diff`: Difference in rolling average ace rate (aces / service points).
-* `df_rate_diff`: Difference in rolling average double fault rate (DFs / service points).
-* `srv_winrate_diff`: Difference in rolling average service points won rate.
-* `height_diff`: Difference in player height (cm). *Currently set to 0 in prediction if not available.*
-* `age_diff`: Difference in player age (years). *Currently set to 0 in prediction if not available.*
-* `surface_is_hard`: 1 if surface is Hard, 0 otherwise.
-* `surface_is_clay`: 1 if surface is Clay, 0 otherwise.
-* `surface_is_grass`: 1 if surface is Grass, 0 otherwise.
-* `surface_is_carpet`: 1 if surface is Carpet, 0 otherwise.
+<!-- RESULTS_TABLE:START -->
+| Model (2024, 31,339 matches) | Accuracy | ROC AUC | Log loss | Brier | ECE |
+| --- | --- | --- | --- | --- | --- |
+| **XGBoost (calibrated)** | **0.6995** | **0.7733** | **0.5680** | **0.1936** | **0.0082** |
+| XGBoost (uncalibrated) | 0.6996 | 0.7734 | 0.5678 | 0.1936 | 0.0095 |
+| Elo (surface-blended) | 0.6724 | 0.7365 | 0.6035 | 0.2083 | 0.0246 |
+| Elo (global) | 0.6735 | 0.7399 | 0.5996 | 0.2067 | 0.0158 |
+| ATP rank only | 0.6732 | 0.7316 | — | — | — |
+| Coin flip | 0.5000 | 0.5000 | 0.6931 | 0.2500 | — |
 
----
+Trained on **716,714 matches** (1,433,428 rows, both player orientations) across 33 features, with 105,974 earlier matches used to warm up ratings. 28,451 players tracked; 3,292,228 weekly ranking snapshots.
+Against the surface-blended Elo baseline the model cuts log loss by **5.9%** and lifts AUC by **3.7 points**.
+Order-invariance holds to 1.1e-16 (worst case over the season).
+<!-- RESULTS_TABLE:END -->
 
-## Data Requirements 💾
+Metrics are computed over **one row per match**, not one row per player-orientation.
 
-This project relies on several CSV datasets, typically sourced from repositories like Jeff Sackmann's tennis_atp:
+<!-- SLICE_TABLE:START -->
+| Slice of the 2024 season | Matches | Accuracy | ROC AUC | Log loss |
+| --- | --- | --- | --- | --- |
+| ATP main tour | 2,973 | 0.6778 | 0.7501 | 0.5853 |
+| Challenger / qualifying | 10,755 | 0.6639 | 0.7306 | 0.6025 |
+| Futures / ITF | 17,611 | 0.7250 | 0.7991 | 0.5441 |
+| Both players 25+ prior matches | 23,521 | 0.6748 | 0.7416 | 0.5964 |
+| Both players 50+ prior matches | 19,408 | 0.6662 | 0.7310 | 0.6048 |
+<!-- SLICE_TABLE:END -->
 
-1.  **Match Data:** Yearly CSV files containing match results. The notebook expects files named like:
-    * `atp_matches_YYYY.csv` (Main ATP Tour)
-    * `atp_matches_qual_chall_YYYY.csv` (Qualifying & Challenger Tours)
-    * `atp_matches_futures_YYYY.csv` (Futures / ITF Tour)
-    * Where `YYYY` is the year (e.g., 2019, 2020...).
-2.  **Player Data:** A single CSV file mapping player IDs to names, handedness, height, etc.
-    * `atp_players.csv`
-3.  **Ranking Data:** CSV files containing weekly ATP rankings. The notebook expects:
-    * `atp_rankings_00s.csv` (Rankings from 2000-2009)
-    * `atp_rankings_10s.csv` (Rankings from 2010-2019)
-    * `atp_rankings_20s.csv` (Rankings from 2020-2023)
-    * `atp_rankings_current.csv` (Rankings from 2024 onwards - used for testing/prediction state)
-    * **Format:** Each ranking file should have columns (preferably without headers): `ranking_date`, `rank`, `player_id`, `points`.
+<!-- DRIFT_TABLE:START -->
+| Quarter of 2024 | Q1 | Q2 | Q3 | Q4 |
+| --- | --- | --- | --- | --- |
+| Matches | 7,639 | 7,842 | 8,017 | 7,841 |
+| Accuracy | 0.6939 | 0.6924 | 0.6970 | 0.7147 |
+| Log loss | 0.5703 | 0.5763 | 0.5690 | 0.5565 |
 
-**File Location:**
+Ratings are frozen at the end of training, yet accuracy varies by only **2.2 points** across the season — the model is not leaning on state that goes stale.
+<!-- DRIFT_TABLE:END -->
 
-* All data files should reside within the directory specified by the `BASE_DIR` variable in the first code cell of the notebook. You **must** update this path to match your local setup.
-
----
-
-## Methodology 🔬
-
-1.  **Loading & Cleaning:** Loads match data for specified training and testing years. Normalizes column names and data types. Removes walkovers, retirements, and matches with missing essential data (player IDs, date). Drops columns that would cause data leakage (e.g., `score`, `minutes`, point-level stats).
-2.  **Ranking Pre-processing:** Loads all relevant ranking files. Filters them by date. Creates an optimized lookup dictionary: `{player_id: ([sorted_dates], [(rank, points)])}`.
-3.  **Feature Engineering:**
-    * Iterates through matches **strictly chronologically**.
-    * For each match, retrieves the **most recent ranking** for both players *before* the match date using the `bisect` module on the pre-processed lookup (O(log N) complexity).
-    * Retrieves the current Elo, surface Elo, H2H record, and rolling stats history for both players from the `PlayerState`.
-    * Calculates all the difference-based features listed above.
-    * Stores the feature row twice: once for `(Player A, Player B, Target=1 if A won)` and once mirrored for `(Player B, Player A, Target=0 if A won)`.
-    * **Post-Match Updates:** After creating the feature row, updates Elo, surface Elo, H2H counts, and rolling statistics history for both players involved.
-4.  **Training:**
-    * Uses the engineered features (`X_train`, `y_train`) and optional sample weights based on tournament level (`w_train`).
-    * Trains an XGBoost classifier (`binary:logistic` objective, `hist` tree method).
-    * Uses the test set (`X_test`, `y_test`) **only for early stopping** to prevent overfitting, mimicking a real-world validation scenario.
-5.  **Evaluation:**
-    * Calculates standard classification metrics on the held-out test set: Accuracy, AUC, LogLoss, Brier Score.
-    * Performs an **order-invariance check** to ensure `P(A wins B) ≈ 1 - P(B wins A)`.
-    * Visualizes feature importances (Gain) and model calibration (Reliability Curve).
+Aggregate numbers are dominated by Futures and Challenger draws, where ranking gaps are
+enormous and outcomes are easy to call. Tour-level matches are the hard case and are
+reported separately rather than being averaged away.
 
 ---
 
-## Setup & Usage 💻
+## Why this is not just another Elo wrapper
 
-**Prerequisites:**
+### Leak-proof by construction
 
-* Python (>= 3.8 recommended)
-* Required libraries:
-    ```
-    pandas>=1.3
-    numpy>=1.20
-    xgboost>=2.0
-    scikit-learn>=1.0
-    matplotlib>=3.5
-    ```
+Matches are replayed in the order they were played. For every match the engine
 
-**Installation:**
+1. **reads** the current state (ratings, form, H2H, serve stats, as-of ranking),
+2. **emits** the feature row,
+3. **then** applies the post-match update.
 
-1.  Clone or download this repository/notebook.
-2.  Download the required ATP datasets (matches, players, rankings) and place them in a single directory.
-3.  Install the required Python libraries:
-    ```bash
-    pip install pandas numpy xgboost scikit-learn matplotlib
-    ```
+A feature therefore cannot depend on the match it describes. The invariant is enforced in
+code — `FeatureBuilder.build` raises if the input is not chronologically sorted — and
+asserted in the test suite, which checks that a player's first-ever appearance carries no
+prior information.
 
-**Configuration:**
+The 2024 test season is protected at three separate points that are commonly leaked:
 
-1.  **`BASE_DIR`:** Open the notebook and **update the `BASE_DIR` variable** in the first code cell to the absolute path of the directory containing your downloaded CSV data files.
-2.  **`TRAIN_YEARS` / `TEST_YEARS`:** Adjust the years used for training and testing if desired. Ensure they are chronologically distinct.
-3.  **`ROLL_N`:** Modify the window size for rolling statistics if needed.
+| Leak vector | How it is closed |
+| --- | --- |
+| Feature construction | strictly chronological single pass |
+| Early stopping | stops on the **2023 validation season**, never on test |
+| Hyperparameter search | scored on validation only |
+| Probability calibration | fitted on validation only |
 
-**Running the Notebook:**
+### Order-invariant, exactly
 
-1.  Launch Jupyter Notebook or Jupyter Lab.
-2.  Open the `Tennis_Prediction_Engine.ipynb` file.
-3.  Execute the cells sequentially ("Run All"). The notebook will:
-    * Load and clean the data.
-    * Build the ranking lookup.
-    * Construct features.
-    * Train the XGBoost model.
-    * Evaluate the model.
-    * Save the trained model (`tennis_xgb_model.json`) and the final player state (`player_state_after_2024.pkl`).
-    * Demonstrate the `predict_match` function.
-
----
-
-## Prediction Function (`predict_match`) 🔮
-
-After running the notebook once to train and save the model/state, you can use the final cells to predict future or hypothetical matches.
-
-* The cell titled **"LOAD MODEL + PLAYER STATE..."** loads the `tennis_xgb_model.json` and `player_state_after_2024.pkl` files.
-* The cell titled **"PREDICT A FUTURE MATCH..."** defines and uses the `predict_match` function.
-
-**Usage:**
+`P(A beats B)` must equal `1 − P(B beats A)`. Every feature is either **antisymmetric**
+(a difference — negates when players swap) or **symmetric** (surface, best-of, tier), so
+swapping players is a sign flip on a fixed mask:
 
 ```python
-# Example: Predict Djokovic vs Alcaraz on Hard court, using rankings/state as of today
-result = predict_match("Novak Djokovic", "Carlos Alcaraz", surface="Hard", match_date="today")
-print(result)
+mirrored_row = row * FLIP_SIGN     # -1 on the diff block, +1 on the rest
+```
 
-# Example: Predict Sinner vs De Minaur on Clay, using rankings/state as of 2025-05-15
-result_clay = predict_match("Jannik Sinner", "Alex De Minaur", surface="Clay", match_date="2025-05-15")
-print(result_clay)
+Training uses both orientations of every match, and prediction averages
+`½·(p(A,B) + 1 − p(B,A))`. The identity then holds to **floating-point precision for every
+match** (max error < 1e-9 across the full test season), rather than "on average, within
+a tolerance".
 
-# Players can also be specified by their ATP player ID
-result_ids = predict_match(104925, 200005, surface="Grass") # Example IDs
-print(result_ids)
+Calibration preserves this too: temperature scaling is exactly symmetric because
+`logit(1−p) = −logit(p)`, and the isotonic variant is fitted on a symmetry-augmented
+sample and averaged in both directions.
 
-**Inputs:**
+### Missing means missing
 
-* `player1`, `player2`: Player names (case-insensitive, first last) or integer ATP player IDs.
-* `surface`: 'Hard', 'Clay', 'Grass', or 'Carpet' (defaults to 'Hard').
-* `match_date`: 'today' (uses current date) or a 'YYYY-MM-DD' string to get the correct historical ranking for that date.
-
-**Output:**
-
-A dictionary containing:
-
-* Player names.
-* Surface and match date used.
-* Predicted win probabilities (`p1_win_prob`, `p2_win_prob`).
-* Implied decimal odds (`p1_decimal_odds`, `p2_decimal_odds`).
+A player with no recorded serve history yields `NaN`, which XGBoost routes down a learned
+default branch. Encoding "no data" as `0.0` would tell the model that a debutant wins 0%
+of service points — false, and far outside the real range, so highly influential.
 
 ---
 
-## Output Files 📦
+## Features (33)
 
-Running the notebook generates two essential files in the same directory as the notebook:
+**Antisymmetric (25)** — negate under player swap:
 
-1.  **`tennis_xgb_model.json`**: The trained XGBoost model saved in JSON format.
-2.  **`player_state_after_2024.pkl`**: A Python pickle file containing the serialized state required for predictions:
-    * `players`: Dictionary mapping `player_id` to their final `PlayerState` (Elo, surface Elo, rolling stats history).
-    * `h2h`: Dictionary storing head-to-head counts.
-    * `rankings`: The optimized ranking lookup dictionary.
-    * `config`: Metadata like feature names, Elo constants, etc.
+| Group | Features |
+| --- | --- |
+| Ratings | `elo_diff`, `surf_elo_diff`, `blend_elo_diff`, `elo_expectation_diff` |
+| Rankings | `rank_diff`, `log_rank_diff`, `log_points_diff`, `is_ranked_diff` |
+| Form & experience | `form_diff` (last 20), `career_winrate_diff`, `log_matches_diff` |
+| Surface record | `surf_winrate_diff`, `log_surf_matches_diff` |
+| Head-to-head | `h2h_diff`, `h2h_surface_diff` |
+| Serve / return | `ace_rate_diff`, `df_rate_diff`, `srv_winrate_diff`, `ret_winrate_diff`, `bp_save_rate_diff` |
+| Schedule | `log_days_since_diff` (rest/rust), `workload_diff` (matches in last 90 days) |
+| Static | `height_diff`, `age_diff`, `lefty_diff` |
+
+**Symmetric (8)** — unchanged under swap: `h2h_total`, `best_of`, `tier_ordinal`, and the
+five-way surface one-hot (`Hard`, `Clay`, `Grass`, `Carpet`, `Unknown`).
+
+**Elo details.** K decays with experience (FiveThirtyEight-style,
+`k = scale / (matches + 5)^0.4`) and is scaled by tour tier — a Futures result moves a
+rating roughly a third as much as a tour-level one. Surface Elo is shrunk toward global
+Elo (`blend = 0.35`) so a player with three career grass matches does not get a
+meaningless grass rating.
+
+**Rankings.** 3.29M weekly snapshots across 16,474 players are collapsed into per-player
+sorted arrays; an as-of lookup is a `O(log n)` binary search.
 
 ---
 
-## Potential Extensions ✨
+## Install & run
 
-* Incorporate richer point-level or summary stats (break points saved/converted, return points won %) via rolling windows.
-* Add features for travel fatigue (time zones crossed, days since last match).
-* Hyperparameter tuning for XGBoost using `TimeSeriesSplit` strictly on the training data.
-* Use the `atp_players.csv` more extensively to fill `height_diff` and `age_diff` reliably during prediction.
-* Implement more rigorous adversarial leakage checks (e.g., training on shuffled labels).
+```bash
+pip install -e ".[dev]"
+```
 
-## Acknowledgements 🙏
+Download the ATP CSVs from [JeffSackmann/tennis_atp](https://github.com/JeffSackmann/tennis_atp)
+into the project root (`atp_matches_*.csv`, `atp_rankings_*.csv`, `atp_players.csv`).
 
-This project heavily relies on the comprehensive and meticulously maintained ATP tennis datasets provided by **Jeff Sackmann** ([https://github.com/JeffSackmann](https://github.com/JeffSackmann)). Special thanks are extended for making such valuable data publicly available, which was instrumental in developing and training this prediction engine.
+```bash
+python -m tennis_engine train                 # full pipeline -> artifacts/
+python -m tennis_engine train --tune 20       # + validation-scored random search
+python -m tennis_engine train --no-futures    # tour + challenger only
+```
+
+Training writes `artifacts/`: `tennis_xgb_model.json`, `engine_state.pkl`,
+`metrics.json`, and diagnostic figures under `artifacts/figures/`.
+
+### Predicting
+
+```bash
+python -m tennis_engine predict "Jannik Sinner" "Carlos Alcaraz" --surface Clay --best-of 5
+python -m tennis_engine predict "Novak Djokovic" "Carlos Alcaraz" --surface Grass --explain
+python -m tennis_engine card "Carlos Alcaraz" --surface Clay
+python -m tennis_engine leaderboard --surface Grass --top 10
+```
+
+```python
+from tennis_engine import PredictionEngine
+
+engine = PredictionEngine.load()
+print(engine.predict_match("Jannik Sinner", "Carlos Alcaraz", surface="Clay", best_of=5))
+print(engine.elo_leaderboard(top_n=10, surface="Clay"))
+```
+
+Names resolve case-insensitively with close-match suggestions on a miss; integer ATP
+player IDs also work.
+
+---
+
+## Layout
+
+```
+src/tennis_engine/
+  config.py       all hyperparameters and paths in one place
+  data.py         loading, cleaning, leakage audit
+  rankings.py     as-of ranking lookup (numpy + searchsorted)
+  state.py        PlayerState, Elo engine, (de)serialization
+  features.py     chronological feature builder, symmetry mask
+  calibration.py  symmetry-preserving probability calibration
+  evaluate.py     metrics, baselines, slices, symmetry checks
+  reporting.py    diagnostic figures
+  pipeline.py     splits -> tune -> train -> evaluate -> save
+  predict.py      PredictionEngine (train/serve parity)
+  cli.py          python -m tennis_engine ...
+tests/            57 tests: leakage, symmetry, as-of lookups, round-trips, end-to-end
+notebooks/        generator for the narrated notebook
+Tennis_Prediction_Engine.ipynb
+```
+
+```bash
+pytest            # ~40s on the synthetic fixture; no real data required
+```
+
+The test suite runs against a synthetic ATP-shaped corpus, so it needs none of the
+900 MB of CSVs. Several tests are explicit regression guards for the bugs listed below.
+
+---
+
+## What changed in v2
+
+The v1 notebook reported 69.52% accuracy / 0.7654 AUC on 2024. Those numbers were not
+trustworthy, and several features were silently dead. The rewrite fixes the following.
+
+**Correctness**
+
+| Bug | Effect | Fix |
+| --- | --- | --- |
+| Leakage-audit regex `…\|wo\|…` matched "**Wo**n" | dropped `w_1stWon`, `w_2ndWon`, `l_1stWon`, `l_2ndWon`, so `srv_winrate_diff` was **identically 0 for all 3.2M rows** | explicit deny-list; regression test asserts no feature is constant |
+| Inference feature vector hand-written separately from training (twice, in two cells, disagreeing) | one copy referenced `rank_points_diff`, a column that never existed → rank and points served as zeros | inference calls the **same** `match_vector` as training |
+| `height_diff` / `age_diff` hard-coded to `0` at prediction time | train/serve skew on two real features | resolved from `atp_players.csv` (height, dob, hand) at both ends |
+| Missing box scores appended as `NaN`, or coerced to `0.0` | poisoned every rolling serve average downstream | excluded from the running mean; surfaced as `NaN` |
+| Surface one-hot built from a dict with only the active key | absent surfaces became `NaN`, never `0` | true one-hot, five categories |
+| Unknown surface rewritten to `Hard` | fabricated hard-court Elo history | `Unknown` kept as its own category |
+| Two near-duplicate "save state" cells, only one storing rankings | whichever ran last silently determined whether prediction worked | single `save_artifacts` |
+
+**Methodology**
+
+- **Early stopping moved off the test set.** v1 early-stopped on 2024 — the number of
+  trees was chosen to minimise test loss, so the reported 2024 metrics were optimistic by
+  construction. v2 introduces a 2023 validation season.
+- **One row per match at evaluation.** v1 mirrored every match into the test set too, so
+  "62,000 test samples" was 31,000 matches counted twice.
+- **Baselines.** Elo, surface-blended Elo, ATP rank and a coin flip are all reported, so
+  the model's contribution over the ratings it is built on is visible.
+- **Calibration.** Fitted on validation, selected by validation log loss, symmetry-preserving.
+- **Order-invariance guaranteed, not asserted within a tolerance.**
+- **Hyperparameter search** over a validation-scored random search (`--tune N`).
+- **Ratings warm up** on 1968–1990 without emitting training rows, instead of cold-starting
+  every rating at 1500 in the first training season.
+
+**Engineering**
+
+- Notebook cells → installable package with a CLI and 57 tests.
+- Single chronological pass instead of building train features and then `deepcopy`-ing a
+  100 MB+ builder for the test split.
+- Serialized state shrunk from **114.6 MB → 63.0 MB** while storing strictly more
+  (surface H2H, per-surface records, schedule history): rolling histories are packed numpy
+  arrays rather than nested Python lists, the two H2H tables are columnar rather than
+  ~1.4M tuple-keyed dict entries, and ranking arrays use narrow dtypes.
+- Feature construction for all 884k matches runs in 80-160 s.
+
+---
+
+## Limitations
+
+- `tourney_date` is the tournament **start** date, so within-tournament ordering relies on
+  `match_num`. Rest-day and workload features are therefore coarse inside a single event.
+- No in-match, injury, retirement-risk, weather or betting-market data.
+- Prediction uses each player's state as of the last processed match; it does not
+  re-simulate ratings forward for matches played after the training corpus ends.
+- Calibration is fitted on one season; a longer validation window would make it steadier.
+
+---
+
+## Acknowledgements
+
+Match, player and ranking data from
+[Jeff Sackmann's tennis_atp](https://github.com/JeffSackmann/tennis_atp), whose
+meticulous curation makes this project possible.
